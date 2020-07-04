@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"k8s.io/client-go/rest"
 
 	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
@@ -92,7 +95,10 @@ func main() {
 
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
-		logger.Fatal("unable to BuildConfigFromFlags", zap.Error(err))
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			log.Fatal("Unable to load configuration")
+		}
 	}
 
 	cs, err := kubernetes.NewForConfig(config)
