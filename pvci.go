@@ -2,6 +2,7 @@ package pvci
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -151,11 +152,40 @@ func (a *Api) CleanupHandler() gin.HandlerFunc {
 // Cleanup
 func (a *Api) Cleanup(pvcRequestConfig PVCRequestConfig) error {
 
+	// delete job
 	jobsClient := a.Cs.BatchV1().Jobs(pvcRequestConfig.Namespace)
 
 	err := jobsClient.Delete(pvcRequestConfig.Name, &metav1.DeleteOptions{})
 	if err != nil {
-		return err
+		a.Log.Warn("unable to delete job", zap.Error(err))
+	}
+
+	podsClient := a.Cs.CoreV1().Pods(pvcRequestConfig.Namespace)
+
+	errMessage := ""
+
+	// list related pods
+	pl, listErr := podsClient.List(metav1.ListOptions{
+		LabelSelector: "job-name=" + pvcRequestConfig.Name,
+	})
+	if listErr != nil {
+		a.Log.Warn("unable to list pods", zap.Error(listErr))
+		errMessage = listErr.Error()
+	}
+
+	if pl != nil {
+		// delete related docs
+		for _, pod := range pl.Items {
+			delErr := podsClient.Delete(pod.Name, &metav1.DeleteOptions{})
+			if delErr != nil {
+				a.Log.Warn("unable delete pod", zap.Error(err))
+				errMessage = errMessage + " " + delErr.Error()
+			}
+		}
+	}
+
+	if errMessage != "" {
+		return errors.New(errMessage)
 	}
 
 	return nil
