@@ -143,6 +143,15 @@ func main() {
 	// create pvc
 	r.POST("/create", api.CreatePVCHandler())
 
+	// get status
+	r.POST("/status", api.GetStatusHandler())
+
+	// cleanup
+	r.POST("/cleanup", api.CleanupHandler())
+
+	// delete
+	r.POST("/delete", api.DeleteHandler())
+
 	// metrics server (run in go routine)
 	go func() {
 		http.Handle("/metrics", promhttp.Handler())

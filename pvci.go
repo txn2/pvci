@@ -17,16 +17,37 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// PVCRequestConfig
-type PVCRequestConfig struct {
+// StatusReport
+type StatusReport struct {
+	JobHasError bool
+	JobError    string
+	JobStatus   batchv1.JobStatus
+	PVCHasError bool
+	PVCError    string
+	PVCStatus   v1.PersistentVolumeClaimStatus
+}
+
+// S3Config
+type S3Config struct {
 	S3Endpoint string `json:"s3_endpoint"`
 	S3SSL      bool   `json:"s3_ssl"`
 	S3Bucket   string `json:"s3_bucket"`
 	S3Prefix   string `json:"s3_prefix"`
 	S3Key      string `json:"s3_key"`
 	S3Secret   string `json:"s3_secret"`
-	Namespace  string `json:"namespace"`
-	Name       string `json:"name"`
+}
+
+// VolConfig
+type VolConfig struct {
+	Namespace    string `json:"namespace"`
+	Name         string `json:"name"`
+	StorageClass string `json:"storage_class"`
+}
+
+// PVCRequestConfig
+type PVCRequestConfig struct {
+	S3Config
+	VolConfig
 }
 
 // Config configures the score API
@@ -64,6 +85,136 @@ func (a *Api) OkHandler(version string, mode string, service string) gin.Handler
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"version": version, "mode": mode, "service": service})
 	}
+}
+
+// DeleteHandler
+func (a *Api) DeleteHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+
+		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"error": "unable to read post body",
+			})
+			return
+		}
+
+		err = a.Delete(*pvcRequestConfig)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{})
+	}
+}
+
+// Delete
+func (a *Api) Delete(pvcRequestConfig PVCRequestConfig) error {
+
+	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(pvcRequestConfig.Namespace)
+
+	err := pvcClient.Delete(pvcRequestConfig.Name, &metav1.DeleteOptions{})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// CleanupHandler
+func (a *Api) CleanupHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+
+		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"error": "unable to read post body",
+			})
+			return
+		}
+
+		err = a.Cleanup(*pvcRequestConfig)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{})
+	}
+}
+
+// Cleanup
+func (a *Api) Cleanup(pvcRequestConfig PVCRequestConfig) error {
+
+	jobsClient := a.Cs.BatchV1().Jobs(pvcRequestConfig.Namespace)
+
+	err := jobsClient.Delete(pvcRequestConfig.Name, &metav1.DeleteOptions{})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// GetStatusHandler
+func (a *Api) GetStatusHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+
+		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"error": "unable to read post body",
+			})
+			return
+		}
+
+		sr, err := a.GetStatus(*pvcRequestConfig)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, sr)
+	}
+}
+
+// GetStatus
+func (a *Api) GetStatus(pvcRequestConfig PVCRequestConfig) (StatusReport, error) {
+	sr := StatusReport{}
+
+	jobsClient := a.Cs.BatchV1().Jobs(pvcRequestConfig.Namespace)
+
+	job, err := jobsClient.Get(pvcRequestConfig.Name, metav1.GetOptions{})
+	if err != nil {
+		sr.JobHasError = true
+		sr.JobError = err.Error()
+	}
+
+	if job != nil {
+		sr.JobStatus = job.Status
+	}
+
+	// get pvc status
+	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(pvcRequestConfig.Namespace)
+
+	pvc, err := pvcClient.Get(pvcRequestConfig.Name, metav1.GetOptions{})
+	if err != nil {
+		sr.PVCHasError = true
+		sr.PVCError = err.Error()
+	}
+
+	if pvc != nil {
+		sr.PVCStatus = pvc.Status
+	}
+
+	return sr, nil
 }
 
 // GetSizeHandler
@@ -165,8 +316,6 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 	storageQty := resource.Quantity{}
 	storageQty.Set(sz)
 
-	storageClass := "rook-ceph-block"
-
 	pvc := v1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pvcRequestConfig.Name,
@@ -175,8 +324,9 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		Spec: v1.PersistentVolumeClaimSpec{
 			AccessModes: []v1.PersistentVolumeAccessMode{
 				"ReadWriteOnce",
+				"ReadOnlyMany",
 			},
-			StorageClassName: &storageClass,
+			StorageClassName: &pvcRequestConfig.StorageClass,
 			VolumeMode:       &volMode,
 			Resources: v1.ResourceRequirements{
 				Requests: v1.ResourceList{
@@ -191,7 +341,7 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		return err
 	}
 
-	// create a Pod attached to the new pvc
+	// create a Job with MinIO client Pod attached to the new pvc
 	jobsClient := a.Cs.BatchV1().Jobs(pvcRequestConfig.Namespace)
 
 	objStoreEpProto := "http://"
