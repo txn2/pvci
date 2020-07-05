@@ -98,7 +98,7 @@ rules:
 # create a binding in namespace_a
 # between the pvci service account in namespace_a
 # and the pvci role in namespace_b
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: pvci-lab
