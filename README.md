@@ -1,8 +1,15 @@
-# pvci
+# WIP: PVCI
+## Persistent Volume Claim Injector
 
-WIP: PVC Injector
+PVCI runs as a web service in a Kubernetes cluster and exposes an API for creating [PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) populated with objects from an S3 compatible ([Minio](https://min.io/) or AWS) storage system.
 
-**POST** body for `/size`:
+## Overview
+
+![](./assets/sequence.png)
+
+## API
+
+1. **POST** body for `/size`:
 ```json
 {
     "s3_ssl": false,
@@ -14,7 +21,8 @@ WIP: PVC Injector
 }
 ```
 
-**POST** body for `/create`:
+
+2. **POST** body for `/create`:
 ```json
 {
     "s3_ssl": false,
@@ -29,7 +37,8 @@ WIP: PVC Injector
 }
 ```
 
-**POST** body for `/status`:
+
+3. **POST** body for `/status`:
 ```json
 {
     "namespace": "default",
@@ -37,7 +46,7 @@ WIP: PVC Injector
 }
 ```
 
-**POST** body for `/cleanup`:
+4. **POST** body for `/cleanup`:
 ```json
 {
     "namespace": "default",
@@ -45,7 +54,7 @@ WIP: PVC Injector
 }
 ```
 
-**POST** body for `/delete`:
+5. **POST** body for `/delete`:
 ```json
 {
     "namespace": "default",
@@ -53,13 +62,12 @@ WIP: PVC Injector
 }
 ```
 
-### Test Release
+## Develoment
 
+### Release
 ```bash
 goreleaser --skip-publish --rm-dist --skip-validate
 ```
-
-### Release
 
 ```bash
 GITHUB_TOKEN=$GITHUB_TOKEN goreleaser --rm-dist
