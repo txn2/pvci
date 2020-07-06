@@ -51,7 +51,7 @@ type PVCRequestConfig struct {
 	VolConfig
 }
 
-// Config configures the score API
+// Config configures the API
 type Config struct {
 	Log *zap.Logger
 	Cs  *kubernetes.Clientset
