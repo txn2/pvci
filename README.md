@@ -173,7 +173,7 @@ spec:
 ```
 
 
-## Develoment
+## Development
 
 ### Release
 ```bash
