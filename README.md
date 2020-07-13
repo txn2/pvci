@@ -1,11 +1,12 @@
-# WIP: PVCi
-## Persistent Volume Claim S3 Object Injector
+![API call sequence](./pvci.png)
+
+## PVCi: Persistent Volume Claim (S3 Object) Injector
 
 PVCI runs as a web service in a Kubernetes cluster and exposes an API for creating [PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) populated with objects from an S3 compatible ([Minio](https://min.io/) or AWS) storage system.
 
 ## Overview
 
-![](./assets/sequence.png)
+![API call sequence](./assets/sequence.png)
 
 ## API
 
