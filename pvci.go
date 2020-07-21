@@ -345,8 +345,8 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 	pvcClient := api.PersistentVolumeClaims(pvcRequestConfig.Namespace)
 	volMode := v1.PersistentVolumeFilesystem
 	storageQty := resource.Quantity{}
-	// MiB to MB Conversion and set
-	storageQty.Set(int64(math.Ceil(float64(sz) * 1.048576)))
+	// MiB/MB Conversion plus 10% overage for copy buffers and set
+	storageQty.Set(int64(math.Ceil((float64(sz) * 1.048576) * 1.1)))
 
 	pvc := v1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
