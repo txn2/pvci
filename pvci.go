@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 
@@ -344,7 +345,8 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 	pvcClient := api.PersistentVolumeClaims(pvcRequestConfig.Namespace)
 	volMode := v1.PersistentVolumeFilesystem
 	storageQty := resource.Quantity{}
-	storageQty.Set(sz)
+	// MiB to MB Conversion and set
+	storageQty.Set(int64(math.Ceil(float64(sz) * 1.048576)))
 
 	pvc := v1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
