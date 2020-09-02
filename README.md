@@ -2,7 +2,7 @@
 
 ## PVCi: Persistent Volume Claim (S3 Object) Injector
 
-PVCI runs as a web service in a Kubernetes cluster and exposes an API for creating [PersistentVolumeClaims](https://kubernetes.io/docs/concepts/storage/persistent-volumes/) populated with objects from an S3 compatible ([Minio](https://min.io/) or AWS) storage system.
+PVCI runs as a web service in a Kubernetes cluster and exposes an API for creating [PersistentVolumeClaims] populated with objects from an S3 compatible ([Minio] or AWS) storage system.
 
 ## Overview
 
@@ -10,7 +10,7 @@ PVCI runs as a web service in a Kubernetes cluster and exposes an API for creati
 
 ## API
 
-1. **POST** body for `/size`:
+**POST** body for `/size`:
 ```json
 {
     "s3_ssl": false,
@@ -22,8 +22,7 @@ PVCI runs as a web service in a Kubernetes cluster and exposes an API for creati
 }
 ```
 
-
-2. **POST** body for `/create`:
+**POST** body for `/create`:
 ```json
 {
     "s3_ssl": false,
@@ -39,7 +38,7 @@ PVCI runs as a web service in a Kubernetes cluster and exposes an API for creati
 ```
 
 
-3. **POST** body for `/status`:
+**POST** body for `/status`:
 ```json
 {
     "namespace": "default",
@@ -47,7 +46,7 @@ PVCI runs as a web service in a Kubernetes cluster and exposes an API for creati
 }
 ```
 
-4. **POST** body for `/cleanup`:
+**POST** body for `/cleanup`:
 ```json
 {
     "namespace": "default",
@@ -55,13 +54,30 @@ PVCI runs as a web service in a Kubernetes cluster and exposes an API for creati
 }
 ```
 
-5. **POST** body for `/delete`:
+**POST** body for `/delete`:
 ```json
 {
     "namespace": "default",
     "name": "test-dataset-1"
 }
 ```
+
+**POST** body for `/mode/rox` (ReadOnlyMany):
+```json
+{
+    "namespace": "default",
+    "name": "test-dataset-1"
+}
+```
+
+**POST** body for `/mode/rwo` (ReadWriteOnce):
+```json
+{
+    "namespace": "default",
+    "name": "test-dataset-1"
+}
+```
+
 
 ## Kubernetes Deployment
 
@@ -173,6 +189,8 @@ spec:
               containerPort: 2112
 ```
 
+[PersistentVolumeClaims]: https://kubernetes.io/docs/concepts/storage/persistent-volumes/
+[Minio]: https://min.io/
 
 ## Development
 

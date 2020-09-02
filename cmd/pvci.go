@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/client-go/rest"
+	v1 "k8s.io/api/core/v1"
 
 	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
@@ -22,7 +22,9 @@ import (
 	"github.com/txn2/pvci"
 	ginprometheus "github.com/zsais/go-gin-prometheus"
 	"go.uber.org/zap"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -108,8 +110,10 @@ func main() {
 
 	// get api
 	api, err := pvci.NewApi(&pvci.Config{
-		Log: logger,
-		Cs:  cs,
+		Service: Service,
+		Version: Version,
+		Log:     logger,
+		Cs:      cs,
 	})
 	if err != nil {
 		logger.Fatal("Error getting API.", zap.Error(err))
@@ -154,6 +158,12 @@ func main() {
 
 	// cleanup
 	r.POST("/cleanup", api.CleanupHandler())
+
+	// set mode to ROX
+	r.POST("/mode/rox", api.SetModeHandler([]corev1.PersistentVolumeAccessMode{v1.ReadOnlyMany}))
+
+	// set mode to RWO
+	r.POST("/mode/rwo", api.SetModeHandler([]corev1.PersistentVolumeAccessMode{v1.ReadWriteOnce}))
 
 	// delete
 	r.POST("/delete", api.DeleteHandler())
