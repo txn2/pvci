@@ -68,10 +68,11 @@ type PVCRequestConfig struct {
 
 // Config configures the API
 type Config struct {
-	Service string
-	Version string
-	Log     *zap.Logger
-	Cs      *kubernetes.Clientset
+	Service              string
+	Version              string
+	VolumeOveragePercent int
+	Log                  *zap.Logger
+	Cs                   *kubernetes.Clientset
 }
 
 // Api
@@ -399,7 +400,7 @@ func (a *Api) CreatePVCHandler() gin.HandlerFunc {
 	}
 }
 
-// create pv
+// CreatePVC
 func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 
 	// get bucket size
@@ -414,10 +415,11 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 	pvcClient := api.PersistentVolumeClaims(pvcRequestConfig.Namespace)
 	volMode := corev1.PersistentVolumeFilesystem
 	storageQty := resource.Quantity{}
-	// MiB/MB Conversion plus 10% overage for copy buffers and set
-	// @TODO overage should be calculated based on the required size of
-	// the opy buffer needed for moving objects.
-	storageQty.Set(int64(math.Ceil((float64(sz) * 1.048576) * 1.1)))
+	// MiB/MB Conversion plus % overage for copy buffers and set
+	// the copy buffer needed for moving objects.
+	pctOver := 1 + (float64(a.VolumeOveragePercent) / 100)
+
+	storageQty.Set(int64(math.Ceil((float64(sz) * 1.048576) * pctOver)))
 
 	pvc := corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{

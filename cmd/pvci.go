@@ -29,12 +29,13 @@ import (
 )
 
 var (
-	ipEnv               = getEnv("IP", "127.0.0.1")
-	portEnv             = getEnv("PORT", "8070")
-	metricsPortEnv      = getEnv("METRICS_PORT", "2112")
-	modeEnv             = getEnv("MODE", "release")
-	httpReadTimeoutEnv  = getEnv("HTTP_READ_TIMEOUT", "10")
-	httpWriteTimeoutEnv = getEnv("HTTP_WRITE_TIMEOUT", "10")
+	ipEnv                   = getEnv("IP", "127.0.0.1")
+	portEnv                 = getEnv("PORT", "8070")
+	metricsPortEnv          = getEnv("METRICS_PORT", "2112")
+	modeEnv                 = getEnv("MODE", "release")
+	httpReadTimeoutEnv      = getEnv("HTTP_READ_TIMEOUT", "10")
+	httpWriteTimeoutEnv     = getEnv("HTTP_WRITE_TIMEOUT", "10")
+	volumeOveragePercentEnv = getEnv("VOLUME_OVERAGE_PCT", "25")
 )
 
 var Version = "0.0.0"
@@ -43,23 +44,30 @@ var Service = "pvci"
 func main() {
 	httpReadTimeoutInt, err := strconv.Atoi(httpReadTimeoutEnv)
 	if err != nil {
-		fmt.Println("Parsing error, readTimeout must be an integer in seconds.")
+		fmt.Println("Parsing error, HTTP_READ_TIMEOUT must be an integer in seconds.")
 		os.Exit(1)
 	}
 
 	httpWriteTimeoutInt, err := strconv.Atoi(httpWriteTimeoutEnv)
 	if err != nil {
-		fmt.Println("Parsing error, readTimeout must be an integer in seconds.")
+		fmt.Println("Parsing error, HTTP_WRITE_TIMEOUT must be an integer in seconds.")
+		os.Exit(1)
+	}
+
+	volumeOveragePercentInt, err := strconv.Atoi(volumeOveragePercentEnv)
+	if err != nil {
+		fmt.Println("Parsing error, VOLUME_OVERAGE_PCT must be an integer.")
 		os.Exit(1)
 	}
 
 	var (
-		ip               = flag.String("ip", ipEnv, "Server IP address to bind to.")
-		port             = flag.String("port", portEnv, "Server port.")
-		metricsPort      = flag.String("metricsPort", metricsPortEnv, "Metrics port.")
-		mode             = flag.String("mode", modeEnv, "debug or release")
-		httpReadTimeout  = flag.Int("httpReadTimeout", httpReadTimeoutInt, "HTTP read timeout")
-		httpWriteTimeout = flag.Int("httpWriteTimeout", httpWriteTimeoutInt, "HTTP write timeout")
+		ip                   = flag.String("ip", ipEnv, "Server IP address to bind to.")
+		port                 = flag.String("port", portEnv, "Server port.")
+		metricsPort          = flag.String("metricsPort", metricsPortEnv, "Metrics port.")
+		mode                 = flag.String("mode", modeEnv, "debug or release")
+		httpReadTimeout      = flag.Int("httpReadTimeout", httpReadTimeoutInt, "HTTP read timeout")
+		httpWriteTimeout     = flag.Int("httpWriteTimeout", httpWriteTimeoutInt, "HTTP write timeout")
+		volumeOveragePercent = flag.Int("volumeOveragePercent", volumeOveragePercentInt, "Volume overage percentage")
 	)
 	flag.Parse()
 
@@ -110,10 +118,11 @@ func main() {
 
 	// get api
 	api, err := pvci.NewApi(&pvci.Config{
-		Service: Service,
-		Version: Version,
-		Log:     logger,
-		Cs:      cs,
+		Service:              Service,
+		Version:              Version,
+		VolumeOveragePercent: *volumeOveragePercent,
+		Log:                  logger,
+		Cs:                   cs,
 	})
 	if err != nil {
 		logger.Fatal("Error getting API.", zap.Error(err))
