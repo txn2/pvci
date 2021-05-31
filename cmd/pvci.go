@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	v1 "k8s.io/api/core/v1"
-
 	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -22,7 +20,8 @@ import (
 	"github.com/txn2/pvci"
 	ginprometheus "github.com/zsais/go-gin-prometheus"
 	"go.uber.org/zap"
-	corev1 "k8s.io/api/core/v1"
+	coreV1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -169,10 +168,10 @@ func main() {
 	r.POST("/cleanup", api.CleanupHandler())
 
 	// set mode to ROX
-	r.POST("/mode/rox", api.SetModeHandler([]corev1.PersistentVolumeAccessMode{v1.ReadOnlyMany}))
+	r.POST("/mode/rox", api.SetModeHandler([]coreV1.PersistentVolumeAccessMode{v1.ReadOnlyMany}))
 
 	// set mode to RWO
-	r.POST("/mode/rwo", api.SetModeHandler([]corev1.PersistentVolumeAccessMode{v1.ReadWriteOnce}))
+	r.POST("/mode/rwo", api.SetModeHandler([]coreV1.PersistentVolumeAccessMode{v1.ReadWriteOnce}))
 
 	// delete
 	r.POST("/delete", api.DeleteHandler())
