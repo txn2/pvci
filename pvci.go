@@ -11,13 +11,13 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	minio "github.com/minio/minio-go/v6"
+	"github.com/minio/minio-go/v6"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
+	batchV1 "k8s.io/api/batch/v1"
+	coreV1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 )
@@ -30,20 +30,21 @@ type PatchOperation struct {
 	Value interface{} `json:"value,omitempty"`
 }
 
-// PatchOperations
 type PatchOperations []PatchOperation
 
-// StatusReport
+// StatusReport structures data returned by the /status endpoint using
+// the GetStatusHandler() and implementing the GetStatus() method in this package.
 type StatusReport struct {
 	JobHasError bool
 	JobError    string
-	JobStatus   batchv1.JobStatus
+	JobStatus   batchV1.JobStatus
 	PVCHasError bool
 	PVCError    string
-	PVCStatus   corev1.PersistentVolumeClaimStatus
+	PVCStatus   coreV1.PersistentVolumeClaimStatus
 }
 
-// S3Config
+// S3Config structures authentication, bucket and prefix
+// configuration used to pull objects from an S3/MinIO object cluster.
 type S3Config struct {
 	S3Endpoint string `json:"s3_endpoint"`
 	S3SSL      bool   `json:"s3_ssl"`
@@ -53,14 +54,19 @@ type S3Config struct {
 	S3Secret   string `json:"s3_secret"`
 }
 
-// VolConfig
+// VolConfig is part of the PVCRequestConfig and used to specify
+// the name of the volume to create the the Kubernetes storage class.
+// run `kubectl get StorageClass` to see a list of available storage
+// classed for a cluster.
 type VolConfig struct {
 	Namespace    string `json:"namespace"`
 	Name         string `json:"name"`
 	StorageClass string `json:"storage_class"`
 }
 
-// PVCRequestConfig
+// PVCRequestConfig is the primary configuration structure for describing
+// the S3/MinIO cluster to pull objects from and kubernetes pvc to create
+// and place the objects in.
 type PVCRequestConfig struct {
 	S3Config
 	VolConfig
@@ -75,15 +81,17 @@ type Config struct {
 	Cs                   *kubernetes.Clientset
 }
 
-// Api
-type Api struct {
+// API is primary object implementing the core API methods
+// and HTTP handlers
+type API struct {
 	*Config
 	LogErrors prometheus.Counter
 }
 
-// NewApi
-func NewApi(cfg *Config) (*Api, error) {
-	a := &Api{Config: cfg}
+// NewApi constructs an API object and populates it with
+// configuration along with setting defaults where required.
+func NewApi(cfg *Config) (*API, error) {
+	a := &API{Config: cfg}
 
 	// default logger if none specified
 	if a.Log == nil {
@@ -99,15 +107,16 @@ func NewApi(cfg *Config) (*Api, error) {
 	return a, nil
 }
 
-// OkHandler
-func (a *Api) OkHandler(version string, mode string, service string) gin.HandlerFunc {
+// OkHandler is provided for created a default slash route for the
+// HTTP API and returns basic version, node and service name.
+func (a *API) OkHandler(version string, mode string, service string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"version": version, "mode": mode, "service": service})
 	}
 }
 
-// DeleteHandler
-func (a *Api) DeleteHandler() gin.HandlerFunc {
+// DeleteHandler used for the /delete HTTP endpoint to delete a PVC
+func (a *API) DeleteHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
@@ -130,13 +139,13 @@ func (a *Api) DeleteHandler() gin.HandlerFunc {
 	}
 }
 
-// Delete
-func (a *Api) Delete(pvcRequestConfig PVCRequestConfig) error {
+// Delete a PVC. @TODO limit to pvc created by PCI by looking at labels
+func (a *API) Delete(pvcRequestConfig PVCRequestConfig) error {
 	ctx := context.Background()
 
 	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(pvcRequestConfig.Namespace)
 
-	err := pvcClient.Delete(ctx, pvcRequestConfig.Name, metav1.DeleteOptions{})
+	err := pvcClient.Delete(ctx, pvcRequestConfig.Name, metaV1.DeleteOptions{})
 	if err != nil {
 		return err
 	}
@@ -144,13 +153,15 @@ func (a *Api) Delete(pvcRequestConfig PVCRequestConfig) error {
 	return nil
 }
 
-// ModeSet
-func (a *Api) ModeSet(pvcRequestConfig PVCRequestConfig, modes []corev1.PersistentVolumeAccessMode) error {
+// ModeSet set a mode on a PVC to one more more of ReadWriteOnce, ReadOnlyMany,
+// ReadWriteMany where supported by the storage driver associated with the
+// storage class of the PVC.
+func (a *API) ModeSet(pvcRequestConfig PVCRequestConfig, modes []coreV1.PersistentVolumeAccessMode) error {
 	ctx := context.Background()
 
 	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(pvcRequestConfig.Namespace)
 
-	pvc, err := pvcClient.Get(ctx, pvcRequestConfig.Name, metav1.GetOptions{})
+	pvc, err := pvcClient.Get(ctx, pvcRequestConfig.Name, metaV1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -166,13 +177,14 @@ func (a *Api) ModeSet(pvcRequestConfig PVCRequestConfig, modes []corev1.Persiste
 	}
 
 	poJson, _ := json.Marshal(po)
-	_, err = a.Cs.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.JSONPatchType, poJson, metav1.PatchOptions{})
+	_, err = a.Cs.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.JSONPatchType, poJson, metaV1.PatchOptions{})
 
 	return err
 }
 
-// ModeRoxHandler
-func (a *Api) SetModeHandler(modes []corev1.PersistentVolumeAccessMode) gin.HandlerFunc {
+// SetModeHandler is ued by the /mode/rox (read-only many) and /mode/rwo (read-write once)
+// HTTP POST endpoints.
+func (a *API) SetModeHandler(modes []coreV1.PersistentVolumeAccessMode) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
 		if err != nil {
@@ -194,8 +206,9 @@ func (a *Api) SetModeHandler(modes []corev1.PersistentVolumeAccessMode) gin.Hand
 	}
 }
 
-// CleanupHandler
-func (a *Api) CleanupHandler() gin.HandlerFunc {
+// CleanupHandler used by the HTTP POST /cleanup endpoint to
+// remove completed jobs.
+func (a *API) CleanupHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
@@ -218,16 +231,16 @@ func (a *Api) CleanupHandler() gin.HandlerFunc {
 	}
 }
 
-// Cleanup
-func (a *Api) Cleanup(pvcRequestConfig PVCRequestConfig) error {
+// Cleanup removes jobs created by PVCI.
+func (a *API) Cleanup(pvcRequestConfig PVCRequestConfig) error {
 	ctx := context.Background()
 
 	// delete job
 	jobsClient := a.Cs.BatchV1().Jobs(pvcRequestConfig.Namespace)
 
-	err := jobsClient.Delete(ctx, pvcRequestConfig.Name, metav1.DeleteOptions{})
+	err := jobsClient.Delete(ctx, pvcRequestConfig.Name, metaV1.DeleteOptions{})
 	if err != nil {
-		a.Log.Warn("unable to delete job", zap.Error(err))
+		a.Log.Error("unable to delete job", zap.Error(err))
 	}
 
 	podsClient := a.Cs.CoreV1().Pods(pvcRequestConfig.Namespace)
@@ -235,7 +248,7 @@ func (a *Api) Cleanup(pvcRequestConfig PVCRequestConfig) error {
 	errMessage := ""
 
 	// list related pods
-	pl, listErr := podsClient.List(ctx, metav1.ListOptions{
+	pl, listErr := podsClient.List(ctx, metaV1.ListOptions{
 		LabelSelector: "job-name=" + pvcRequestConfig.Name,
 	})
 	if listErr != nil {
@@ -246,9 +259,9 @@ func (a *Api) Cleanup(pvcRequestConfig PVCRequestConfig) error {
 	if pl != nil {
 		// delete related docs
 		for _, pod := range pl.Items {
-			delErr := podsClient.Delete(ctx, pod.Name, metav1.DeleteOptions{})
+			delErr := podsClient.Delete(ctx, pod.Name, metaV1.DeleteOptions{})
 			if delErr != nil {
-				a.Log.Warn("unable delete pod", zap.Error(err))
+				a.Log.Error("unable delete pod", zap.Error(err))
 				errMessage = errMessage + " " + delErr.Error()
 			}
 		}
@@ -261,8 +274,9 @@ func (a *Api) Cleanup(pvcRequestConfig PVCRequestConfig) error {
 	return nil
 }
 
-// GetStatusHandler
-func (a *Api) GetStatusHandler() gin.HandlerFunc {
+// GetStatusHandler is used by the HTTP POST /status endpoint
+// and returns a StatusReport object as JSON.
+func (a *API) GetStatusHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
@@ -285,14 +299,15 @@ func (a *Api) GetStatusHandler() gin.HandlerFunc {
 	}
 }
 
-// GetStatus
-func (a *Api) GetStatus(pvcRequestConfig PVCRequestConfig) (StatusReport, error) {
+// GetStatus returns a StatusReport representing the state of PVCI created
+// Jobs and PVCs.
+func (a *API) GetStatus(pvcRequestConfig PVCRequestConfig) (StatusReport, error) {
 	sr := StatusReport{}
 	ctx := context.Background()
 
 	jobsClient := a.Cs.BatchV1().Jobs(pvcRequestConfig.Namespace)
 
-	job, err := jobsClient.Get(ctx, pvcRequestConfig.Name, metav1.GetOptions{})
+	job, err := jobsClient.Get(ctx, pvcRequestConfig.Name, metaV1.GetOptions{})
 	if err != nil {
 		sr.JobHasError = true
 		sr.JobError = err.Error()
@@ -305,7 +320,7 @@ func (a *Api) GetStatus(pvcRequestConfig PVCRequestConfig) (StatusReport, error)
 	// get pvc status
 	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(pvcRequestConfig.Namespace)
 
-	pvc, err := pvcClient.Get(ctx, pvcRequestConfig.Name, metav1.GetOptions{})
+	pvc, err := pvcClient.Get(ctx, pvcRequestConfig.Name, metaV1.GetOptions{})
 	if err != nil {
 		sr.PVCHasError = true
 		sr.PVCError = err.Error()
@@ -318,8 +333,9 @@ func (a *Api) GetStatus(pvcRequestConfig PVCRequestConfig) (StatusReport, error)
 	return sr, nil
 }
 
-// GetSizeHandler
-func (a *Api) GetSizeHandler() gin.HandlerFunc {
+// GetSizeHandler used by the HTTP POST endpoint /size to get the
+// size of a list of S3/MinIO objects (files) based on bucket and prefix.
+func (a *API) GetSizeHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
@@ -342,8 +358,9 @@ func (a *Api) GetSizeHandler() gin.HandlerFunc {
 	}
 }
 
-// GetSize
-func (a *Api) GetSize(pvcRequestConfig PVCRequestConfig) (int64, int64, error) {
+// GetSize gets the size of a list of S3/MinIO objects (files) based on
+// bucket and prefix specified in a PVCRequestConfig object.
+func (a *API) GetSize(pvcRequestConfig PVCRequestConfig) (int64, int64, error) {
 	objCount := int64(0)
 	totalSize := int64(0)
 
@@ -376,8 +393,10 @@ func (a *Api) GetSize(pvcRequestConfig PVCRequestConfig) (int64, int64, error) {
 	return objCount, totalSize, nil
 }
 
-// CreatePVCHandler
-func (a *Api) CreatePVCHandler() gin.HandlerFunc {
+// CreatePVCHandler used by the HTTP POST /create endpoint. CreatePVCHandler is
+// the core purpose of PVCI, to create PVCs and inject them with files. This
+// handler expects a JSON object representing a PVCRequestConfig.
+func (a *API) CreatePVCHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
@@ -400,8 +419,11 @@ func (a *Api) CreatePVCHandler() gin.HandlerFunc {
 	}
 }
 
-// CreatePVC
-func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
+// CreatePVC is the core purpose of PVCI, to create PVCs and inject
+// them with files. CreatePVC takes a PVCRequestConfig object and
+// creates a Kubernetes PVC, followed by a Kubernetes Job used to
+// populate it.
+func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 
 	// get bucket size
 	objCount, sz, err := a.GetSize(pvcRequestConfig)
@@ -413,7 +435,7 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 
 	// create a PersistentVolumeClaim sized for the bucket data
 	pvcClient := api.PersistentVolumeClaims(pvcRequestConfig.Namespace)
-	volMode := corev1.PersistentVolumeFilesystem
+	volMode := coreV1.PersistentVolumeFilesystem
 	storageQty := resource.Quantity{}
 	// MiB/MB Conversion plus % overage for copy buffers and set
 	// the copy buffer needed for moving objects.
@@ -421,8 +443,8 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 
 	storageQty.Set(int64(math.Ceil((float64(sz) * 1.048576) * pctOver)))
 
-	pvc := corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
+	pvc := coreV1.PersistentVolumeClaim{
+		ObjectMeta: metaV1.ObjectMeta{
 			Name:      pvcRequestConfig.Name,
 			Namespace: pvcRequestConfig.Namespace,
 			Labels: map[string]string{
@@ -439,23 +461,23 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 				),
 			},
 		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{
+		Spec: coreV1.PersistentVolumeClaimSpec{
+			AccessModes: []coreV1.PersistentVolumeAccessMode{
 				"ReadWriteOnce",
 				"ReadOnlyMany",
 			},
 			StorageClassName: &pvcRequestConfig.StorageClass,
 			VolumeMode:       &volMode,
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: storageQty,
+			Resources: coreV1.ResourceRequirements{
+				Requests: coreV1.ResourceList{
+					coreV1.ResourceStorage: storageQty,
 				},
 			},
 		},
 	}
 
 	ctx := context.Background()
-	_, err = pvcClient.Create(ctx, &pvc, metav1.CreateOptions{})
+	_, err = pvcClient.Create(ctx, &pvc, metaV1.CreateOptions{})
 	if err != nil {
 		return err
 	}
@@ -485,28 +507,28 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 	// seconds to keep job
 	ttl := int32(120)
 
-	job := batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
+	job := batchV1.Job{
+		ObjectMeta: metaV1.ObjectMeta{
 			Name:      pvcRequestConfig.Name,
 			Namespace: pvcRequestConfig.Namespace,
 		},
-		Spec: batchv1.JobSpec{
+		Spec: batchV1.JobSpec{
 			TTLSecondsAfterFinished: &ttl,
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyOnFailure,
-					Volumes: []corev1.Volume{
+			Template: coreV1.PodTemplateSpec{
+				Spec: coreV1.PodSpec{
+					RestartPolicy: coreV1.RestartPolicyOnFailure,
+					Volumes: []coreV1.Volume{
 						{
 							Name: "attached-pvc",
-							VolumeSource: corev1.VolumeSource{
-								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							VolumeSource: coreV1.VolumeSource{
+								PersistentVolumeClaim: &coreV1.PersistentVolumeClaimVolumeSource{
 									ClaimName: pvcRequestConfig.Name,
 									ReadOnly:  false,
 								},
 							},
 						},
 					},
-					Containers: []corev1.Container{
+					Containers: []coreV1.Container{
 						{
 							Name:  pvcRequestConfig.Name,
 							Image: "minio/mc:RELEASE.2020-06-26T19-56-55Z",
@@ -517,13 +539,13 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 								"objstore/" + objPath,
 								"/data",
 							},
-							VolumeMounts: []corev1.VolumeMount{
+							VolumeMounts: []coreV1.VolumeMount{
 								{
 									MountPath: "/data",
 									Name:      "attached-pvc",
 								},
 							},
-							Env: []corev1.EnvVar{
+							Env: []coreV1.EnvVar{
 								{
 									Name:  "MC_HOST_objstore",
 									Value: objStoreEp,
@@ -536,7 +558,7 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		},
 	}
 
-	_, err = jobsClient.Create(ctx, &job, metav1.CreateOptions{})
+	_, err = jobsClient.Create(ctx, &job, metaV1.CreateOptions{})
 	if err != nil {
 		a.Log.Error("could not create job",
 			zap.String("name", pvcRequestConfig.Name),
@@ -544,7 +566,7 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		)
 
 		// clean up pvc
-		err := pvcClient.Delete(ctx, pvcRequestConfig.Name, metav1.DeleteOptions{})
+		err := pvcClient.Delete(ctx, pvcRequestConfig.Name, metaV1.DeleteOptions{})
 		if err != nil {
 			a.Log.Error("could not delete pvc",
 				zap.String("name", pvcRequestConfig.Name),
@@ -560,8 +582,9 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 	return nil
 }
 
-// getMinIOClient
-func (a *Api) getMinIOClient(pvcRequestConfig PVCRequestConfig) (*minio.Client, error) {
+// getMinIOClient constructs a MinIO client used for interacting with
+// MinIO or S3. See: https://docs.min.io/docs/golang-client-api-reference
+func (a *API) getMinIOClient(pvcRequestConfig PVCRequestConfig) (*minio.Client, error) {
 
 	// Initialize MinIO client object.
 	minioClient, err := minio.New(
@@ -577,8 +600,9 @@ func (a *Api) getMinIOClient(pvcRequestConfig PVCRequestConfig) (*minio.Client, 
 	return minioClient, err
 }
 
-// parsePVCRequestConfig
-func (a *Api) parsePVCRequestConfig(c *gin.Context) (*PVCRequestConfig, error) {
+// parsePVCRequestConfig is used to Unmarshal JSON representing the PVCRequestConfig
+// sent in on POST from most inbound API calls.
+func (a *API) parsePVCRequestConfig(c *gin.Context) (*PVCRequestConfig, error) {
 	rs, err := c.GetRawData()
 	if err != nil {
 		return nil, err
