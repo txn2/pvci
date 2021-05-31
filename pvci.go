@@ -538,7 +538,7 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 
 	_, err = jobsClient.Create(ctx, &job, metav1.CreateOptions{})
 	if err != nil {
-		a.Log.Warn("cloud not create job",
+		a.Log.Error("could not create job",
 			zap.String("name", pvcRequestConfig.Name),
 			zap.Error(err),
 		)
@@ -546,7 +546,7 @@ func (a *Api) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		// clean up pvc
 		err := pvcClient.Delete(ctx, pvcRequestConfig.Name, metav1.DeleteOptions{})
 		if err != nil {
-			a.Log.Warn("cloud not delete pvc",
+			a.Log.Error("could not delete pvc",
 				zap.String("name", pvcRequestConfig.Name),
 				zap.Error(err),
 			)
