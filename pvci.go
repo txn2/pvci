@@ -77,6 +77,7 @@ type Config struct {
 	Service              string
 	Version              string
 	VolumeOveragePercent int
+	MCImage              string
 	Log                  *zap.Logger
 	Cs                   *kubernetes.Clientset
 }
@@ -531,7 +532,7 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 					Containers: []coreV1.Container{
 						{
 							Name:  pvcRequestConfig.Name,
-							Image: "minio/mc:RELEASE.2020-06-26T19-56-55Z",
+							Image: a.MCImage,
 							Command: []string{
 								"mc",
 								"cp",

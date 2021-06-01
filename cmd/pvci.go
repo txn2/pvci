@@ -35,6 +35,7 @@ var (
 	httpReadTimeoutEnv      = getEnv("HTTP_READ_TIMEOUT", "10")
 	httpWriteTimeoutEnv     = getEnv("HTTP_WRITE_TIMEOUT", "10")
 	volumeOveragePercentEnv = getEnv("VOLUME_OVERAGE_PCT", "25")
+	mcImageEnv              = getEnv("MC_IMAGE", "minio/mc:RELEASE.2020-06-26T19-56-55Z")
 )
 
 var Version = "0.0.0"
@@ -67,6 +68,7 @@ func main() {
 		httpReadTimeout      = flag.Int("httpReadTimeout", httpReadTimeoutInt, "HTTP read timeout")
 		httpWriteTimeout     = flag.Int("httpWriteTimeout", httpWriteTimeoutInt, "HTTP write timeout")
 		volumeOveragePercent = flag.Int("volumeOveragePercent", volumeOveragePercentInt, "Volume overage percentage")
+		mcImage              = flag.String("mcImage", mcImageEnv, "MinIO client image")
 	)
 	flag.Parse()
 
@@ -120,6 +122,7 @@ func main() {
 		Service:              Service,
 		Version:              Version,
 		VolumeOveragePercent: *volumeOveragePercent,
+		MCImage:              *mcImage,
 		Log:                  logger,
 		Cs:                   cs,
 	})
