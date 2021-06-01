@@ -3,10 +3,9 @@ module github.com/txn2/pvci
 go 1.14
 
 require (
-	github.com/davecgh/go-spew v1.1.1
 	github.com/gin-contrib/zap v0.0.1 // indirect
 	github.com/gin-gonic/gin v1.6.3
-	github.com/go-ini/ini v1.57.0 // indirect
+	github.com/go-ini/ini v1.62.0 // indirect
 	github.com/imdario/mergo v0.3.9 // indirect
 	github.com/minio/minio-go v6.0.14+incompatible // indirect
 	github.com/minio/minio-go/v6 v6.0.57
