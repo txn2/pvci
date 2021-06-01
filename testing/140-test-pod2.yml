@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pvc-pod2
+  namespace: pvci-test
+spec:
+  volumes:
+    - name: pvc-from-pcv
+      persistentVolumeClaim:
+        claimName: pvc-from-pcv
+  containers:
+    - name: mc
+      imagePullPolicy: IfNotPresent
+      image: minio/mc
+      command: [ "/bin/tail", "-f", "/dev/null" ]
+      volumeMounts:
+        - mountPath: /sample
+          name: pvc-from-pcv

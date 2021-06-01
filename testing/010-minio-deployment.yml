@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: pvci-test
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+        component: web
+    spec:
+      volumes:
+        - name: data-volume
+          emptyDir: {}
+      containers:
+        - name: minio
+          imagePullPolicy: Always
+          image: minio/minio
+          args:
+            - server
+            - /data
+          env:
+            - name: MINIO_ROOT_USER
+              value: "private-test"
+            - name: MINIO_ROOT_PASSWORD
+              value: "private-test"
+          volumeMounts:
+            - mountPath: /data
+              name: data-volume
+          ports:
+            - name: http-web
+              containerPort: 9000
+          resources:
+            requests:
+              cpu: 250m
+              memory: 24Mi
+            limits:
+              cpu: 500m
+              memory: 132Mi

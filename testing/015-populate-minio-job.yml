@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: populate-minio
+  namespace: pvci-test
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 30
+  ttlSecondsAfterFinished: 100
+  template:
+    spec:
+      volumes:
+        - name: sample-volume
+          emptyDir: {}
+      initContainers:
+        - name: sample-a-init
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["/bin/sh"]
+          args: ['-c', '/bin/base64 /dev/urandom | /bin/head -c 10000000 > /sample/a-10mb.txt']
+          volumeMounts:
+            - mountPath: /sample
+              name: sample-volume
+        - name: sample-b-init
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["/bin/sh"]
+          args: ['-c', '/bin/base64 /dev/urandom | /bin/head -c 20000000 > /sample/b-20mb.txt']
+          volumeMounts:
+            - mountPath: /sample
+              name: sample-volume
+        - name: bucket-init
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["mc", "mb", "--ignore-existing", "minio/sample"]
+          env:
+            - name: MC_HOST_minio
+              value: "http://private-test:private-test@minio:9000"
+      containers:
+        - name: mc
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["mc", "cp", "-r", "/sample/", "minio/sample"]
+          env:
+            - name: MC_HOST_minio
+              value: "http://private-test:private-test@minio:9000"
+          volumeMounts:
+            - mountPath: /sample
+              name: sample-volume
+      restartPolicy: Never

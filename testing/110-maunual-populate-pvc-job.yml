@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: populate-pvc
+  namespace: pvci-test
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 30
+  ttlSecondsAfterFinished: 100
+  template:
+    spec:
+      volumes:
+        - name: test-rwo-volume
+          persistentVolumeClaim:
+            claimName: test-rwo
+      containers:
+        - name: mc
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["mc", "cp", "-r", "minio/sample/", "/sample/"]
+          env:
+            - name: MC_HOST_minio
+              value: "http://private-test:private-test@minio:9000"
+          volumeMounts:
+            - mountPath: /sample
+              name: test-rwo-volume
+      restartPolicy: Never
