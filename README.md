@@ -140,7 +140,7 @@ spec:
       serviceAccountName: pvci
       containers:
         - name: pvci
-          image: txn2/pvci:0.0.3
+          image: txn2/pvci:0.4.0
           imagePullPolicy: IfNotPresent
           env:
             - name: IP
