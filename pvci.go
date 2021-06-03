@@ -198,7 +198,7 @@ func (a *API) GetStatus(pvcRequestConfig PVCRequestConfig) (StatusReport, error)
 	}
 
 	if pods == nil || len(pods.Items) < 1 {
-		sr.PVCHasError = true
+		sr.InjectorHasError = true
 		sr.InjectorError = "no injectors found"
 	}
 
