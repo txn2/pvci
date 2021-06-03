@@ -1,6 +1,6 @@
 module github.com/txn2/pvci
 
-go 1.14
+go 1.16
 
 require (
 	github.com/gin-contrib/zap v0.0.1 // indirect
