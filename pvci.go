@@ -35,9 +35,12 @@ type PatchOperations []PatchOperation
 // StatusReport structures data returned by the /status endpoint using
 // the GetStatusHandler() and implementing the GetStatus() method in this package.
 type StatusReport struct {
-	PVCHasError bool
-	PVCError    string
-	PVCStatus   coreV1.PersistentVolumeClaimStatus
+	InjectorHasError bool
+	InjectorError    string
+	InjectorState    string
+	PVCHasError      bool
+	PVCError         string
+	PVCStatus        coreV1.PersistentVolumeClaimStatus
 }
 
 // S3Config structures authentication, bucket and prefix
@@ -74,6 +77,7 @@ type Config struct {
 	Service              string
 	Version              string
 	VolumeOveragePercent int
+	AvgMPS               int
 	MCImage              string
 	Log                  *zap.Logger
 	Cs                   *kubernetes.Clientset
@@ -182,6 +186,26 @@ func (a *API) GetStatus(pvcRequestConfig PVCRequestConfig) (StatusReport, error)
 	sr := StatusReport{}
 	ctx := context.Background()
 
+	// get injector status
+	podClient := a.Cs.CoreV1().Pods(pvcRequestConfig.Namespace)
+
+	pods, err := podClient.List(ctx, metaV1.ListOptions{
+		LabelSelector: fmt.Sprintf("pvci.txn2.com/vol=%s", pvcRequestConfig.Name),
+	})
+	if err != nil {
+		sr.InjectorHasError = true
+		sr.InjectorError = err.Error()
+	}
+
+	if pods == nil || len(pods.Items) < 1 {
+		sr.PVCHasError = true
+		sr.InjectorError = "no injectors found"
+	}
+
+	if pods != nil && len(pods.Items) > 0 {
+		sr.InjectorState = fmt.Sprintf("%s", pods.Items[0].Status.Phase)
+	}
+
 	// get pvc status
 	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(pvcRequestConfig.Namespace)
 
@@ -266,6 +290,10 @@ func (a *API) CreatePVCHandler() gin.HandlerFunc {
 
 		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
 		if err != nil {
+			a.Log.Warn("parsePVCRequestConfig aborted with error",
+				zap.Int("code", http.StatusBadRequest),
+				zap.String("reason", err.Error()))
+
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"error": "unable to read post body",
 			})
@@ -274,6 +302,10 @@ func (a *API) CreatePVCHandler() gin.HandlerFunc {
 
 		err = a.CreatePVC(*pvcRequestConfig)
 		if err != nil {
+			a.Log.Warn("CreatePVCHandler aborted with error",
+				zap.Int("code", http.StatusBadRequest),
+				zap.String("reason", err.Error()))
+
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"error": err.Error(),
 			})
@@ -284,11 +316,68 @@ func (a *API) CreatePVCHandler() gin.HandlerFunc {
 	}
 }
 
+func (a *API) CreatePVCAsyncHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+
+		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
+		if err != nil {
+			a.Log.Warn("parsePVCRequestConfig aborted with error",
+				zap.Int("code", http.StatusBadRequest),
+				zap.String("reason", err.Error()))
+
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+				"error": "unable to read post body",
+			})
+			return
+		}
+
+		go func() {
+			err = a.CreatePVC(*pvcRequestConfig)
+			if err != nil {
+				a.Log.Warn("CreatePVCHandler aborted with error",
+					zap.Int("code", http.StatusBadRequest),
+					zap.String("reason", err.Error()))
+			}
+		}()
+
+		c.JSON(http.StatusOK, gin.H{})
+	}
+}
+
 // CreatePVC is the core purpose of PVCI, to create PVCs and inject
 // them with files. CreatePVC takes a PVCRequestConfig object and
 // creates a Kubernetes PVC, followed by a Kubernetes Job used to
 // populate it.
 func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
+	ctx := context.Background()
+	api := a.Cs.CoreV1()
+
+	// create a PersistentVolumeClaim sized for the bucket data
+	pvcClient := api.PersistentVolumeClaims(pvcRequestConfig.Namespace)
+
+	// does the PVC exist
+	existingPVC, _ := pvcClient.Get(ctx, pvcRequestConfig.Name, metaV1.GetOptions{})
+	if existingPVC != nil && existingPVC.Name != "" {
+		a.Log.Info("Found existing PVC",
+			zap.String("namespace", pvcRequestConfig.Namespace),
+			zap.String("name", pvcRequestConfig.Name),
+			zap.String("phase", fmt.Sprintf("%s", existingPVC.Status.Phase)),
+		)
+
+		return fmt.Errorf("found a %s PVC named %s", existingPVC.Status.Phase, pvcRequestConfig.Name)
+	}
+
+	// does the PVC exist
+	existingSrcPVC, _ := pvcClient.Get(ctx, fmt.Sprintf("%s-src", pvcRequestConfig.Name), metaV1.GetOptions{})
+	if existingSrcPVC != nil && existingSrcPVC.Name != "" {
+		a.Log.Info("Found existing PVC",
+			zap.String("namespace", pvcRequestConfig.Namespace),
+			zap.String("name", existingSrcPVC.Name),
+			zap.String("phase", fmt.Sprintf("%s", existingSrcPVC.Status.Phase)),
+		)
+
+		return fmt.Errorf("found a %s PVC named %s", existingSrcPVC.Status.Phase, existingSrcPVC.Name)
+	}
 
 	// get bucket size
 	objCount, sz, err := a.GetSize(pvcRequestConfig)
@@ -296,10 +385,23 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		return err
 	}
 
-	api := a.Cs.CoreV1()
+	// calculate run estimate
+	runEst := sz / (int64(a.AvgMPS) * 1048576)
 
-	// create a PersistentVolumeClaim sized for the bucket data
-	pvcClient := api.PersistentVolumeClaims(pvcRequestConfig.Namespace)
+	// calculate timeouts at a slow 5mb/sec
+	a.Log.Info("CreatePVC called",
+		zap.Int64("object_count", objCount),
+		zap.Int64("size", sz),
+		zap.Int64("run_est", runEst),
+		zap.Int("run_est_cfg_mps", a.AvgMPS),
+		zap.String("name", pvcRequestConfig.Name),
+		zap.String("namespace", pvcRequestConfig.Namespace),
+		zap.String("bucket", pvcRequestConfig.S3Bucket),
+		zap.String("prefix", pvcRequestConfig.S3Prefix),
+		zap.String("s3_endpoint", pvcRequestConfig.S3Endpoint),
+		zap.Any("vol_config", pvcRequestConfig.VolConfig),
+	)
+
 	volMode := coreV1.PersistentVolumeFilesystem
 
 	// MiB/MB Conversion plus % overage for copy buffers and set
@@ -349,7 +451,6 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		zap.String("namespace", srcPVCSpecification.Namespace))
 
 	// Create source PVC Spec
-	ctx := context.Background()
 	_, err = pvcClient.Create(ctx, &srcPVCSpecification, metaV1.CreateOptions{})
 	if err != nil {
 		return err
@@ -394,9 +495,41 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		ObjectMeta: metaV1.ObjectMeta{
 			Name:      jobName,
 			Namespace: pvcRequestConfig.Namespace,
+			Labels: map[string]string{
+				"pvci.txn2.com/vol":     pvcRequestConfig.Name,
+				"pvci.txn2.com/job":     "injector",
+				"pvci.txn2.com/service": a.Service,
+				"pvci.txn2.com/version": a.Version,
+			},
+			Annotations: map[string]string{
+				"pvci.txn2.com/requested_size": strconv.FormatInt(sz, 10),
+				"pvci.txn2.com/object_count":   strconv.FormatInt(objCount, 10),
+				"pvci.txn2.com/origin": fmt.Sprintf("%s/%s/%s",
+					pvcRequestConfig.S3Endpoint,
+					pvcRequestConfig.S3Bucket,
+					pvcRequestConfig.S3Prefix,
+				),
+			},
 		},
 		Spec: batchV1.JobSpec{
 			Template: coreV1.PodTemplateSpec{
+				ObjectMeta: metaV1.ObjectMeta{
+					Labels: map[string]string{
+						"pvci.txn2.com/vol":     pvcRequestConfig.Name,
+						"pvci.txn2.com/job":     "injector",
+						"pvci.txn2.com/service": a.Service,
+						"pvci.txn2.com/version": a.Version,
+					},
+					Annotations: map[string]string{
+						"pvci.txn2.com/requested_size": strconv.FormatInt(sz, 10),
+						"pvci.txn2.com/object_count":   strconv.FormatInt(objCount, 10),
+						"pvci.txn2.com/origin": fmt.Sprintf("%s/%s/%s",
+							pvcRequestConfig.S3Endpoint,
+							pvcRequestConfig.S3Bucket,
+							pvcRequestConfig.S3Prefix,
+						),
+					},
+				},
 				Spec: coreV1.PodSpec{
 					RestartPolicy: coreV1.RestartPolicyOnFailure,
 					Volumes: []coreV1.Volume{
@@ -462,7 +595,7 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 	}
 
 	// check job status (up to 60 seconds)
-	err = a.checkJob(pvcRequestConfig.Namespace, jobName)
+	err = a.checkJob(pvcRequestConfig.Namespace, jobName, runEst)
 	if err != nil {
 		return err
 	}
@@ -571,26 +704,33 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 	return nil
 }
 
+const JobAttemptInterval = 5
+
 // checkJob loops over a period for checking job status
-// @TODO make backoff configurable or based on objects and size
-func (a *API) checkJob(namespace string, name string) error {
+func (a *API) checkJob(namespace string, name string, timeout int64) error {
 	attempt := 0
-	retrySecs := []int{
-		5, 5, 5, 5, 5, 5,
-		10, 10, 10, 10, 10, 10,
-		20, 20, 20, 20, 20, 20,
-		30, 30, 30, 30, 30, 30,
-		60, 60, 60, 60, 60, 60}
+	maxAttempts := 1
+
+	// add 50 percent to overhead
+	maxTime := float64(timeout) + (float64(timeout) * .5)
+	if maxTime > JobAttemptInterval {
+		maxAttempts = int(math.Ceil(maxTime / JobAttemptInterval))
+	}
+
+	if maxAttempts < 6 {
+		maxAttempts = 6
+	}
+
 	for {
-		if attempt > len(retrySecs)-1 {
+		time.Sleep(time.Duration(JobAttemptInterval) * time.Second)
+
+		if attempt > maxAttempts {
 			a.Log.Error("job is unable to complete in allotted time",
 				zap.String("name", name),
 				zap.String("namespace", namespace),
 			)
 			return fmt.Errorf("job is unable to complete in allotted time")
 		}
-
-		time.Sleep(time.Duration(retrySecs[attempt]) * time.Second)
 
 		job, err := a.getJob(namespace, name)
 		if err != nil {
@@ -603,6 +743,9 @@ func (a *API) checkJob(namespace string, name string) error {
 			zap.Int32("active", job.Status.Active),
 			zap.Int32("succeeded", job.Status.Succeeded),
 			zap.Int32("failed", job.Status.Failed),
+			zap.Int("check_attempt", attempt),
+			zap.Int("max_attempts", maxAttempts),
+			zap.Int("attempt_interval", JobAttemptInterval),
 		)
 
 		if job.Status.Failed > 0 {
@@ -631,12 +774,7 @@ func (a *API) getJob(namespace string, name string) (*batchV1.Job, error) {
 
 func (a *API) checkPVC(namespace string, name string) error {
 	attempt := 0
-	retrySecs := []int{
-		1, 2, 2, 4, 4, 4, 4,
-		8, 8, 8, 8, 8, 8, 8, 8,
-		16, 16, 16, 16, 16, 16,
-		32, 32, 32, 32, 32, 32,
-		64, 64, 64, 64, 64, 64}
+	retrySecs := []int{1, 2, 2, 4, 4, 4, 8, 8, 8, 8, 8}
 	//var srcPVC *coreV1.PersistentVolumeClaim
 	for {
 		if attempt > len(retrySecs)-1 {

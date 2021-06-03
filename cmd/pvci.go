@@ -33,6 +33,7 @@ var (
 	httpReadTimeoutEnv      = getEnv("HTTP_READ_TIMEOUT", "10")
 	httpWriteTimeoutEnv     = getEnv("HTTP_WRITE_TIMEOUT", "1200")
 	volumeOveragePercentEnv = getEnv("VOLUME_OVERAGE_PCT", "25")
+	avgMPSEnv               = getEnv("AVG_MPS", "13")
 	mcImageEnv              = getEnv("MC_IMAGE", "minio/mc:RELEASE.2020-06-26T19-56-55Z")
 )
 
@@ -58,6 +59,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	avgMPSInt, err := strconv.Atoi(avgMPSEnv)
+	if err != nil {
+		fmt.Println("Parsing error, AVG_MPS must be an integer of megabytes.")
+		os.Exit(1)
+	}
+
 	var (
 		ip                   = flag.String("ip", ipEnv, "Server IP address to bind to.")
 		port                 = flag.String("port", portEnv, "Server port.")
@@ -67,6 +74,7 @@ func main() {
 		httpWriteTimeout     = flag.Int("httpWriteTimeout", httpWriteTimeoutInt, "HTTP write timeout")
 		volumeOveragePercent = flag.Int("volumeOveragePercent", volumeOveragePercentInt, "Volume overage percentage")
 		mcImage              = flag.String("mcImage", mcImageEnv, "MinIO client image")
+		avgMPS               = flag.Int("avgMPS", avgMPSInt, "Average transport speed in megabytes per second, use to calculate timeout estimate.")
 	)
 	flag.Parse()
 
@@ -121,6 +129,7 @@ func main() {
 		Version:              Version,
 		VolumeOveragePercent: *volumeOveragePercent,
 		MCImage:              *mcImage,
+		AvgMPS:               *avgMPS,
 		Log:                  logger,
 		Cs:                   cs,
 	})
@@ -161,6 +170,9 @@ func main() {
 
 	// create pvc
 	r.POST("/create", api.CreatePVCHandler())
+
+	// create pvc
+	r.POST("/create-async", api.CreatePVCAsyncHandler())
 
 	// get status
 	r.POST("/status", api.GetStatusHandler())
