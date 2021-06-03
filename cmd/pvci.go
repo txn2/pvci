@@ -20,8 +20,6 @@ import (
 	"github.com/txn2/pvci"
 	ginprometheus "github.com/zsais/go-gin-prometheus"
 	"go.uber.org/zap"
-	coreV1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -33,7 +31,7 @@ var (
 	metricsPortEnv          = getEnv("METRICS_PORT", "2112")
 	modeEnv                 = getEnv("MODE", "release")
 	httpReadTimeoutEnv      = getEnv("HTTP_READ_TIMEOUT", "10")
-	httpWriteTimeoutEnv     = getEnv("HTTP_WRITE_TIMEOUT", "10")
+	httpWriteTimeoutEnv     = getEnv("HTTP_WRITE_TIMEOUT", "1200")
 	volumeOveragePercentEnv = getEnv("VOLUME_OVERAGE_PCT", "25")
 	mcImageEnv              = getEnv("MC_IMAGE", "minio/mc:RELEASE.2020-06-26T19-56-55Z")
 )
@@ -166,18 +164,6 @@ func main() {
 
 	// get status
 	r.POST("/status", api.GetStatusHandler())
-
-	// cleanup
-	r.POST("/cleanup", api.CleanupHandler())
-
-	// set mode to ROX
-	r.POST("/mode/rox", api.SetModeHandler([]coreV1.PersistentVolumeAccessMode{v1.ReadOnlyMany}))
-
-	// set mode to RWO
-	r.POST("/mode/rwo", api.SetModeHandler([]coreV1.PersistentVolumeAccessMode{v1.ReadWriteOnce}))
-
-	// delete
-	r.POST("/delete", api.DeleteHandler())
 
 	// metrics server (run in go routine)
 	go func() {

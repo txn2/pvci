@@ -5,8 +5,7 @@ metadata:
   namespace: pvci-test
 spec:
   backoffLimit: 1
-  activeDeadlineSeconds: 30
-  ttlSecondsAfterFinished: 100
+  activeDeadlineSeconds: 300
   template:
     spec:
       volumes:
@@ -26,6 +25,46 @@ spec:
           image: minio/mc
           command: ["/bin/sh"]
           args: ['-c', '/bin/base64 /dev/urandom | /bin/head -c 20000000 > /sample/b-20mb.txt']
+          volumeMounts:
+            - mountPath: /sample
+              name: sample-volume
+        - name: sample-c-init
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["/bin/sh"]
+          args: ['-c', '/bin/base64 /dev/urandom | /bin/head -c 40000000 > /sample/b-40mb.txt']
+          volumeMounts:
+            - mountPath: /sample
+              name: sample-volume
+        - name: sample-d-init
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["/bin/sh"]
+          args: ['-c', '/bin/base64 /dev/urandom | /bin/head -c 80000000 > /sample/b-80mb.txt']
+          volumeMounts:
+            - mountPath: /sample
+              name: sample-volume
+        - name: sample-e-init
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["/bin/sh"]
+          args: ['-c', '/bin/base64 /dev/urandom | /bin/head -c 160000000 > /sample/b-160mb.txt']
+          volumeMounts:
+            - mountPath: /sample
+              name: sample-volume
+        - name: sample-f-init
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["/bin/sh"]
+          args: ['-c', '/bin/base64 /dev/urandom | /bin/head -c 320000000 > /sample/b-320mb.txt']
+          volumeMounts:
+            - mountPath: /sample
+              name: sample-volume
+        - name: sample-g-init
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["/bin/sh"]
+          args: ['-c', '/bin/base64 /dev/urandom | /bin/head -c 640000000 > /sample/b-640mb.txt']
           volumeMounts:
             - mountPath: /sample
               name: sample-volume

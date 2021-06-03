@@ -3,12 +3,12 @@ package pvci
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/minio/minio-go/v6"
@@ -35,9 +35,6 @@ type PatchOperations []PatchOperation
 // StatusReport structures data returned by the /status endpoint using
 // the GetStatusHandler() and implementing the GetStatus() method in this package.
 type StatusReport struct {
-	JobHasError bool
-	JobError    string
-	JobStatus   batchV1.JobStatus
 	PVCHasError bool
 	PVCError    string
 	PVCStatus   coreV1.PersistentVolumeClaimStatus
@@ -154,127 +151,6 @@ func (a *API) Delete(pvcRequestConfig PVCRequestConfig) error {
 	return nil
 }
 
-// ModeSet set a mode on a PVC to one more more of ReadWriteOnce, ReadOnlyMany,
-// ReadWriteMany where supported by the storage driver associated with the
-// storage class of the PVC.
-func (a *API) ModeSet(pvcRequestConfig PVCRequestConfig, modes []coreV1.PersistentVolumeAccessMode) error {
-	ctx := context.Background()
-
-	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(pvcRequestConfig.Namespace)
-
-	pvc, err := pvcClient.Get(ctx, pvcRequestConfig.Name, metaV1.GetOptions{})
-	if err != nil {
-		return err
-	}
-
-	a.Log.Info("ModeSet", zap.String("VolumeName", pvc.Spec.VolumeName))
-
-	po := &PatchOperations{
-		{
-			Op:    "add",
-			Path:  "/spec/accessModes",
-			Value: modes,
-		},
-	}
-
-	poJson, _ := json.Marshal(po)
-	_, err = a.Cs.CoreV1().PersistentVolumes().Patch(ctx, pvc.Spec.VolumeName, types.JSONPatchType, poJson, metaV1.PatchOptions{})
-
-	return err
-}
-
-// SetModeHandler is ued by the /mode/rox (read-only many) and /mode/rwo (read-write once)
-// HTTP POST endpoints.
-func (a *API) SetModeHandler(modes []coreV1.PersistentVolumeAccessMode) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"error": "unable to read post body",
-			})
-			return
-		}
-
-		err = a.ModeSet(*pvcRequestConfig, modes)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"error": err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{})
-	}
-}
-
-// CleanupHandler used by the HTTP POST /cleanup endpoint to
-// remove completed jobs.
-func (a *API) CleanupHandler() gin.HandlerFunc {
-	return func(c *gin.Context) {
-
-		pvcRequestConfig, err := a.parsePVCRequestConfig(c)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"error": "unable to read post body",
-			})
-			return
-		}
-
-		err = a.Cleanup(*pvcRequestConfig)
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
-				"error": err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{})
-	}
-}
-
-// Cleanup removes jobs created by PVCI.
-func (a *API) Cleanup(pvcRequestConfig PVCRequestConfig) error {
-	ctx := context.Background()
-
-	// delete job
-	jobsClient := a.Cs.BatchV1().Jobs(pvcRequestConfig.Namespace)
-
-	err := jobsClient.Delete(ctx, pvcRequestConfig.Name, metaV1.DeleteOptions{})
-	if err != nil {
-		a.Log.Error("unable to delete job", zap.Error(err))
-	}
-
-	podsClient := a.Cs.CoreV1().Pods(pvcRequestConfig.Namespace)
-
-	errMessage := ""
-
-	// list related pods
-	pl, listErr := podsClient.List(ctx, metaV1.ListOptions{
-		LabelSelector: "job-name=" + pvcRequestConfig.Name,
-	})
-	if listErr != nil {
-		a.Log.Warn("unable to list pods", zap.Error(listErr))
-		errMessage = listErr.Error()
-	}
-
-	if pl != nil {
-		// delete related docs
-		for _, pod := range pl.Items {
-			delErr := podsClient.Delete(ctx, pod.Name, metaV1.DeleteOptions{})
-			if delErr != nil {
-				a.Log.Error("unable delete pod", zap.Error(err))
-				errMessage = errMessage + " " + delErr.Error()
-			}
-		}
-	}
-
-	if errMessage != "" {
-		return errors.New(errMessage)
-	}
-
-	return nil
-}
-
 // GetStatusHandler is used by the HTTP POST /status endpoint
 // and returns a StatusReport object as JSON.
 func (a *API) GetStatusHandler() gin.HandlerFunc {
@@ -305,18 +181,6 @@ func (a *API) GetStatusHandler() gin.HandlerFunc {
 func (a *API) GetStatus(pvcRequestConfig PVCRequestConfig) (StatusReport, error) {
 	sr := StatusReport{}
 	ctx := context.Background()
-
-	jobsClient := a.Cs.BatchV1().Jobs(pvcRequestConfig.Namespace)
-
-	job, err := jobsClient.Get(ctx, pvcRequestConfig.Name, metaV1.GetOptions{})
-	if err != nil {
-		sr.JobHasError = true
-		sr.JobError = err.Error()
-	}
-
-	if job != nil {
-		sr.JobStatus = job.Status
-	}
 
 	// get pvc status
 	pvcClient := a.Cs.CoreV1().PersistentVolumeClaims(pvcRequestConfig.Namespace)
@@ -437,16 +301,20 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 	// create a PersistentVolumeClaim sized for the bucket data
 	pvcClient := api.PersistentVolumeClaims(pvcRequestConfig.Namespace)
 	volMode := coreV1.PersistentVolumeFilesystem
-	storageQty := resource.Quantity{}
+
 	// MiB/MB Conversion plus % overage for copy buffers and set
 	// the copy buffer needed for moving objects.
 	pctOver := 1 + (float64(a.VolumeOveragePercent) / 100)
 
-	storageQty.Set(int64(math.Ceil((float64(sz) * 1.048576) * pctOver)))
+	storageQtyBuffer := resource.Quantity{}
+	storageQtyBuffer.Set(int64(math.Ceil((float64(sz) * 1.048576) * pctOver)))
 
-	pvc := coreV1.PersistentVolumeClaim{
+	srcPVCName := fmt.Sprintf("%s-src", pvcRequestConfig.Name)
+
+	// Create source PVC Spec
+	srcPVCSpecification := coreV1.PersistentVolumeClaim{
 		ObjectMeta: metaV1.ObjectMeta{
-			Name:      pvcRequestConfig.Name,
+			Name:      srcPVCName,
 			Namespace: pvcRequestConfig.Namespace,
 			Labels: map[string]string{
 				"pvci.txn2.com/service": a.Service,
@@ -465,25 +333,40 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		Spec: coreV1.PersistentVolumeClaimSpec{
 			AccessModes: []coreV1.PersistentVolumeAccessMode{
 				"ReadWriteOnce",
-				"ReadOnlyMany",
 			},
 			StorageClassName: &pvcRequestConfig.StorageClass,
 			VolumeMode:       &volMode,
 			Resources: coreV1.ResourceRequirements{
 				Requests: coreV1.ResourceList{
-					coreV1.ResourceStorage: storageQty,
+					coreV1.ResourceStorage: storageQtyBuffer,
 				},
 			},
 		},
 	}
 
+	a.Log.Info("Creating PVC",
+		zap.String("name", srcPVCName),
+		zap.String("namespace", srcPVCSpecification.Namespace))
+
+	// Create source PVC Spec
 	ctx := context.Background()
-	_, err = pvcClient.Create(ctx, &pvc, metaV1.CreateOptions{})
+	_, err = pvcClient.Create(ctx, &srcPVCSpecification, metaV1.CreateOptions{})
 	if err != nil {
 		return err
 	}
 
-	// create a Job with MinIO client Pod attached to the new pvc
+	// rolling backoff check for proper PVC status
+	err = a.checkPVC(pvcRequestConfig.Namespace, srcPVCName)
+	if err != nil {
+		a.Log.Error("checkPVC failed",
+			zap.String("name", srcPVCName),
+			zap.String("namespace", srcPVCSpecification.Namespace),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	// create a Job with MinIO client Pod attached to the new srcPVCSpecification
 	jobsClient := a.Cs.BatchV1().Jobs(pvcRequestConfig.Namespace)
 
 	objStoreEpProto := "http://"
@@ -505,25 +388,23 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		pvcRequestConfig.S3Prefix,
 	)
 
-	// seconds to keep job
-	ttl := int32(120)
+	jobName := fmt.Sprintf("%s-injector", pvcRequestConfig.Name)
 
-	job := batchV1.Job{
+	jobSpecification := batchV1.Job{
 		ObjectMeta: metaV1.ObjectMeta{
-			Name:      pvcRequestConfig.Name,
+			Name:      jobName,
 			Namespace: pvcRequestConfig.Namespace,
 		},
 		Spec: batchV1.JobSpec{
-			TTLSecondsAfterFinished: &ttl,
 			Template: coreV1.PodTemplateSpec{
 				Spec: coreV1.PodSpec{
 					RestartPolicy: coreV1.RestartPolicyOnFailure,
 					Volumes: []coreV1.Volume{
 						{
-							Name: "attached-pvc",
+							Name: "srcpvc",
 							VolumeSource: coreV1.VolumeSource{
 								PersistentVolumeClaim: &coreV1.PersistentVolumeClaimVolumeSource{
-									ClaimName: pvcRequestConfig.Name,
+									ClaimName: srcPVCName,
 									ReadOnly:  false,
 								},
 							},
@@ -531,19 +412,19 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 					},
 					Containers: []coreV1.Container{
 						{
-							Name:  pvcRequestConfig.Name,
+							Name:  "mc",
 							Image: a.MCImage,
 							Command: []string{
 								"mc",
 								"cp",
 								"-r",
 								"objstore/" + objPath,
-								"/data",
+								"/srcpvc",
 							},
 							VolumeMounts: []coreV1.VolumeMount{
 								{
-									MountPath: "/data",
-									Name:      "attached-pvc",
+									MountPath: "/srcpvc",
+									Name:      "srcpvc",
 								},
 							},
 							Env: []coreV1.EnvVar{
@@ -559,28 +440,242 @@ func (a *API) CreatePVC(pvcRequestConfig PVCRequestConfig) error {
 		},
 	}
 
-	_, err = jobsClient.Create(ctx, &job, metaV1.CreateOptions{})
+	_, err = jobsClient.Create(ctx, &jobSpecification, metaV1.CreateOptions{})
 	if err != nil {
 		a.Log.Error("could not create job",
+			zap.String("namespace", pvcRequestConfig.Namespace),
+			zap.String("name", jobName),
+			zap.Error(err),
+		)
+
+		// clean up on fail
+		cleanErr := pvcClient.Delete(ctx, srcPVCName, metaV1.DeleteOptions{})
+		if err != nil {
+			a.Log.Error("could not delete pvc",
+				zap.String("namespace", pvcRequestConfig.Namespace),
+				zap.String("name", srcPVCName),
+				zap.Error(cleanErr),
+			)
+		}
+
+		return err
+	}
+
+	// check job status (up to 60 seconds)
+	err = a.checkJob(pvcRequestConfig.Namespace, jobName)
+	if err != nil {
+		return err
+	}
+
+	// cleanup job
+	err = jobsClient.Delete(ctx, jobName, metaV1.DeleteOptions{})
+	if err != nil {
+		a.Log.Error("unable to cleanup job",
+			zap.String("namespace", pvcRequestConfig.Namespace),
+			zap.String("name", jobName),
+			zap.Error(err),
+		)
+	}
+
+	// Create roxPVC from srcPVC
+	pvcSpecification := coreV1.PersistentVolumeClaim{
+		ObjectMeta: metaV1.ObjectMeta{
+			Name:      pvcRequestConfig.Name,
+			Namespace: pvcRequestConfig.Namespace,
+			Labels: map[string]string{
+				"pvci.txn2.com/service": a.Service,
+				"pvci.txn2.com/version": a.Version,
+			},
+			Annotations: map[string]string{
+				"pvci.txn2.com/requested_size": strconv.FormatInt(sz, 10),
+				"pvci.txn2.com/object_count":   strconv.FormatInt(objCount, 10),
+				"pvci.txn2.com/origin": fmt.Sprintf("%s/%s/%s",
+					pvcRequestConfig.S3Endpoint,
+					pvcRequestConfig.S3Bucket,
+					pvcRequestConfig.S3Prefix,
+				),
+			},
+		},
+		Spec: coreV1.PersistentVolumeClaimSpec{
+			DataSource: &coreV1.TypedLocalObjectReference{
+				Kind: "PersistentVolumeClaim",
+				Name: srcPVCName,
+			},
+			AccessModes: []coreV1.PersistentVolumeAccessMode{
+				"ReadOnlyMany",
+			},
+			StorageClassName: &pvcRequestConfig.StorageClass,
+			VolumeMode:       &volMode,
+			Resources: coreV1.ResourceRequirements{
+				Requests: coreV1.ResourceList{
+					coreV1.ResourceStorage: storageQtyBuffer,
+				},
+			},
+		},
+	}
+
+	_, err = pvcClient.Create(ctx, &pvcSpecification, metaV1.CreateOptions{})
+	if err != nil {
+		// @TODO if error clean up src PVC
+		a.Log.Error("unable to create PVC",
+			zap.String("namespace", pvcRequestConfig.Namespace),
 			zap.String("name", pvcRequestConfig.Name),
 			zap.Error(err),
 		)
 
-		// clean up pvc
-		err := pvcClient.Delete(ctx, pvcRequestConfig.Name, metaV1.DeleteOptions{})
-		if err != nil {
-			a.Log.Error("could not delete pvc",
-				zap.String("name", pvcRequestConfig.Name),
-				zap.Error(err),
-			)
-			return err
-		}
 		return err
 	}
 
-	// edit PVC remove ReadWriteOnce
+	// rolling backoff check for proper PVC status
+	err = a.checkPVC(pvcRequestConfig.Namespace, srcPVCName)
+	if err != nil {
+		// @TODO if error clean up src PVC
+		a.Log.Error("checkPVC failed",
+			zap.String("name", srcPVCName),
+			zap.String("namespace", srcPVCSpecification.Namespace),
+			zap.Error(err),
+		)
+
+		return err
+	}
+
+	// delete srcPVC
+	err = pvcClient.Delete(ctx, srcPVCName, metaV1.DeleteOptions{})
+	if err != nil {
+		a.Log.Error("unable to delete source PVC",
+			zap.String("name", srcPVCName),
+			zap.String("namespace", srcPVCSpecification.Namespace),
+			zap.Error(err),
+		)
+	}
+
+	// patch pvc to remove finalizers for deletion
+	po := &PatchOperations{
+		{
+			Op:   "remove",
+			Path: "/metadata/finalizers/0",
+		},
+	}
+
+	poJson, _ := json.Marshal(po)
+
+	_, err = pvcClient.Patch(ctx, srcPVCName, types.JSONPatchType, poJson, metaV1.PatchOptions{})
+	if err != nil {
+		a.Log.Error("unable to patch source PVC",
+			zap.String("name", srcPVCName),
+			zap.String("namespace", srcPVCSpecification.Namespace),
+			zap.Error(err),
+		)
+	}
 
 	return nil
+}
+
+// checkJob loops over a period for checking job status
+// @TODO make backoff configurable or based on objects and size
+func (a *API) checkJob(namespace string, name string) error {
+	attempt := 0
+	retrySecs := []int{
+		5, 5, 5, 5, 5, 5,
+		10, 10, 10, 10, 10, 10,
+		20, 20, 20, 20, 20, 20,
+		30, 30, 30, 30, 30, 30,
+		60, 60, 60, 60, 60, 60}
+	for {
+		if attempt > len(retrySecs)-1 {
+			a.Log.Error("job is unable to complete in allotted time",
+				zap.String("name", name),
+				zap.String("namespace", namespace),
+			)
+			return fmt.Errorf("job is unable to complete in allotted time")
+		}
+
+		time.Sleep(time.Duration(retrySecs[attempt]) * time.Second)
+
+		job, err := a.getJob(namespace, name)
+		if err != nil {
+			return err
+		}
+
+		a.Log.Info("Job status",
+			zap.String("name", name),
+			zap.String("namespace", namespace),
+			zap.Int32("active", job.Status.Active),
+			zap.Int32("succeeded", job.Status.Succeeded),
+			zap.Int32("failed", job.Status.Failed),
+		)
+
+		if job.Status.Failed > 0 {
+			return fmt.Errorf("job failed")
+		}
+
+		if job.Status.Succeeded > 0 {
+			return nil
+		}
+
+		attempt += 1
+	}
+}
+
+func (a *API) getJob(namespace string, name string) (*batchV1.Job, error) {
+	ctx := context.Background()
+
+	// check status with rolling backoff
+	job, err := a.Cs.BatchV1().Jobs(namespace).Get(ctx, name, metaV1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	return job, nil
+}
+
+func (a *API) checkPVC(namespace string, name string) error {
+	attempt := 0
+	retrySecs := []int{
+		1, 2, 2, 4, 4, 4, 4,
+		8, 8, 8, 8, 8, 8, 8, 8,
+		16, 16, 16, 16, 16, 16,
+		32, 32, 32, 32, 32, 32,
+		64, 64, 64, 64, 64, 64}
+	//var srcPVC *coreV1.PersistentVolumeClaim
+	for {
+		if attempt > len(retrySecs)-1 {
+			a.Log.Error("requested PVC is unable to reach Bound phase",
+				zap.String("name", name),
+				zap.String("namespace", namespace),
+			)
+			return fmt.Errorf("requested PVC is unable to reach Bound phase")
+		}
+
+		time.Sleep(time.Duration(retrySecs[attempt]) * time.Second)
+
+		srcPVC, err := a.getPVC(namespace, name)
+		if err != nil {
+			return err
+		}
+
+		a.Log.Info("PVC status phase",
+			zap.String("name", name),
+			zap.String("namespace", namespace),
+			zap.Any("status", srcPVC.Status.Phase))
+		if srcPVC.Status.Phase == coreV1.ClaimBound {
+			return nil
+		}
+
+		attempt += 1
+	}
+}
+
+func (a *API) getPVC(namespace string, name string) (*coreV1.PersistentVolumeClaim, error) {
+	ctx := context.Background()
+
+	// check status with rolling backoff
+	srcPVC, err := a.Cs.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, name, metaV1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	return srcPVC, nil
 }
 
 // getMinIOClient constructs a MinIO client used for interacting with

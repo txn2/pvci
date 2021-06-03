@@ -46,37 +46,6 @@ PVCI runs as a web service in a Kubernetes cluster and exposes an API for creati
 }
 ```
 
-**POST** body for `/cleanup`:
-```json
-{
-    "namespace": "default",
-    "name": "test-dataset-1"
-}
-```
-
-**POST** body for `/delete`:
-```json
-{
-    "namespace": "default",
-    "name": "test-dataset-1"
-}
-```
-
-**POST** body for `/mode/rox` (ReadOnlyMany):
-```json
-{
-    "namespace": "default",
-    "name": "test-dataset-1"
-}
-```
-
-**POST** body for `/mode/rwo` (ReadWriteOnce):
-```json
-{
-    "namespace": "default",
-    "name": "test-dataset-1"
-}
-```
 
 
 ## Kubernetes Deployment

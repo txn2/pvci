@@ -10,18 +10,30 @@ spec:
   template:
     spec:
       volumes:
+        - name: tmp-volume
+          emptyDir: {}
         - name: test-rwo-volume
           persistentVolumeClaim:
             claimName: test-rwo
-      containers:
+      initContainers:
         - name: mc
           imagePullPolicy: IfNotPresent
           image: minio/mc
-          command: ["mc", "cp", "-r", "minio/sample/", "/sample/"]
+          command: ["sh", "-c", "mc cp -r minio/sample/ /tmpdata/"]
           env:
             - name: MC_HOST_minio
               value: "http://private-test:private-test@minio:9000"
           volumeMounts:
-            - mountPath: /sample
+            - mountPath: /tmpdata
+              name: tmp-volume
+      containers:
+        - name: cp
+          imagePullPolicy: IfNotPresent
+          image: minio/mc
+          command: ["sh", "-c", "cp -r /tmpdata/* /datavol/"]
+          volumeMounts:
+            - mountPath: /tmpdata
+              name: tmp-volume
+            - mountPath: /datavol
               name: test-rwo-volume
       restartPolicy: Never
